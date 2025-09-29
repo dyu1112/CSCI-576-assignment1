@@ -15,8 +15,8 @@ namespace fs = std::filesystem;
  */
 
 /** Declarations*/
-const int WIDTH = 352;
-const int HEIGHT = 288;
+const int WIDTH = 512;
+const int HEIGHT = 512;
 const int DEBUG_X = 0;
 const int DEBUG_Y = 0;
 
@@ -51,6 +51,14 @@ float *normalizeImageData(unsigned char *inData, int width, int height);
 
 void uniformQuantization(unsigned char* inData, int q1, int q2, int q3);
 void uniformQuantization(float* inData, int q1, int q2, int q3);
+
+void nonUniformQuantization(unsigned char* inData, int q1, int q2, int q3);
+void nonUniformQuantizationF(float* inData, int q1, int q2, int q3);
+
+void nonUniformRegions(unsigned char* inData, unsigned char* upperBounds, unsigned char* centroids, int channel, int q, int regions);
+void nonUniformRegionsF(float* inData, float* upperBounds, float* centroids, int channel, int q, int regions, float minBound, float maxBound);
+void medianCut(vector<unsigned char>& upperBounds, const vector<unsigned char>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices);
+void medianCutF(vector<float>& upperBounds, const vector<float>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices);
 
 /** Definitions */
 
@@ -95,6 +103,9 @@ bool MyApp::OnInit() {
     if (quantizationMode == 1) {
       uniformQuantization(inData, q1, q2, q3);
     }
+    else {
+      nonUniformQuantization(inData, q1, q2, q3);
+    }
   }
   if (colorMode == 2) {
     float *data = normalizeImageData(inData, WIDTH, HEIGHT);
@@ -113,11 +124,18 @@ bool MyApp::OnInit() {
 
     if (quantizationMode == 1) {
       uniformQuantization(data, q1, q2, q3);
-      cout << "In YUV after uniform quantization: " << data[3 * DEBUG_X * DEBUG_Y] << ", " << data[3 * DEBUG_X * DEBUG_Y + 1] << ", " << data[3 * DEBUG_X * DEBUG_Y + 2] << endl; 
     }
+    else {
+      nonUniformQuantizationF(data, q1, q2, q3);
+    }
+    cout << "In YUV after quantization: " << data[3 * DEBUG_X * DEBUG_Y] << ", " << data[3 * DEBUG_X * DEBUG_Y + 1] << ", " << data[3 * DEBUG_X * DEBUG_Y + 2] << endl; 
 
     // YUV to RGB
     for (int i = 0; i < WIDTH * HEIGHT; i++) {
+      data[3*i] = clamp<float>(data[3*i], 0.f, 1.f);
+      data[3*i+1] = clamp<float>(data[3*i+1], -0.436f, 0.436f);
+      data[3*i+2] = clamp<float>(data[3*i+2], -0.615f, 0.615f);
+
       float r = 1.000f * data[3*i] + 0.000f * data[3*i+1] + 1.1398f * data[3*i+2];
       float g = 1.000f * data[3*i] + -0.3946f * data[3*i+1] + -0.5806f * data[3*i+2];
       float b = 1.000f * data[3*i] + 2.0321f * data[3*i+1] + 0.f * data[3*i+2];
@@ -274,6 +292,231 @@ void uniformQuantization(float* inData, int q1, int q2, int q3) {
   free(upperBounds1);
   free(upperBounds2);
   free(upperBounds3);
+}
+
+void nonUniformRegions(unsigned char* inData, unsigned char* upperBounds, unsigned char* centroids, int channel, int q, int regions) {
+  vector<unsigned char> sortedChannel(WIDTH*HEIGHT);
+  vector<unsigned char> sortedUpperBounds = {};
+  vector<int> biasIndices = {};
+  sortedUpperBounds.push_back(0); // Min
+  
+  for (int i = 0; i < HEIGHT * WIDTH; i++) {
+    sortedChannel[i] = inData[3*i+channel];
+  }
+  sort(sortedChannel.begin(), sortedChannel.end());
+
+  medianCut(sortedUpperBounds, sortedChannel, 0, WIDTH*HEIGHT, q, biasIndices);
+  sort(sortedUpperBounds.begin(), sortedUpperBounds.end());
+  for (int i = 0; i < regions; i++) {
+    upperBounds[i] = sortedUpperBounds[i];
+  }
+  upperBounds[regions] = 1; // Max
+
+  biasIndices.push_back(0);
+  biasIndices.push_back(WIDTH * HEIGHT);
+  sort(biasIndices.begin(), biasIndices.end());
+  for (int i = 0; i < biasIndices.size() - 1; i++) {
+    int count = 0;
+    int total = 0;
+
+    for (int j = biasIndices[i]; j < biasIndices[i+1]; j++) {
+      count++;
+      total += sortedChannel[j];
+    }
+    centroids[i] = total / count;
+  }
+}
+
+void nonUniformRegionsF(float* inData, float* upperBounds, float* centroids, int channel, int q, int regions, float minBound, float maxBound) {
+  vector<float> sortedChannel(WIDTH*HEIGHT);
+  vector<float> sortedUpperBounds = {};
+  vector<int> biasIndices = {};
+  sortedUpperBounds.push_back(minBound); // Min
+
+  for (int i = 0; i < HEIGHT * WIDTH; i++) {
+    sortedChannel[i] = inData[3*i+channel];
+  }
+  sort(sortedChannel.begin(), sortedChannel.end());
+
+  medianCutF(sortedUpperBounds, sortedChannel, 0, WIDTH*HEIGHT, q, biasIndices);
+  sort(sortedUpperBounds.begin(), sortedUpperBounds.end());
+  for (int i = 0; i < regions; i++) {
+    upperBounds[i] = sortedUpperBounds[i];
+  }
+  upperBounds[regions] = maxBound; // Max
+
+  biasIndices.push_back(0);
+  biasIndices.push_back(WIDTH * HEIGHT);
+  sort(biasIndices.begin(), biasIndices.end());
+  for (int i = 0; i < biasIndices.size() - 1; i++) {
+    int count = 0;
+    float total = 0;
+
+    for (int j = biasIndices[i]; j < biasIndices[i+1]; j++) {
+      count++;
+      total += sortedChannel[j];
+    }
+    centroids[i] = total / count;
+  }
+}
+
+// lowerBound is inclusive
+// upperBound is exclusive
+void medianCut(vector<unsigned char>& upperBounds, const vector<unsigned char>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices) {
+  if (q == 0) {
+    return;
+  }
+
+  int bias = (upperBound + lowerBound) / 2;
+  biasIndices.push_back(bias);
+  upperBounds.push_back(sortedChannel[bias]);
+
+  medianCut(upperBounds, sortedChannel, lowerBound, bias, q-1, biasIndices);
+  medianCut(upperBounds, sortedChannel, bias, upperBound, q-1, biasIndices);
+}
+
+void medianCutF(vector<float>& upperBounds, const vector<float>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices) {
+  if (q == 0) {
+    return;
+  }
+
+  int bias = (upperBound + lowerBound) / 2;
+  biasIndices.push_back(bias);
+  upperBounds.push_back(sortedChannel[bias]);
+
+  medianCutF(upperBounds, sortedChannel, lowerBound, bias, q-1, biasIndices);
+  medianCutF(upperBounds, sortedChannel, bias, upperBound, q-1, biasIndices);
+}
+
+void nonUniformQuantization(unsigned char* inData, int q1, int q2, int q3) {
+  int regions1 = pow(2,q1);
+  int regions2 = pow(2,q2);
+  int regions3 = pow(2,q3);
+
+  unsigned char *upperBounds1 =
+      (unsigned char *)malloc((regions1 + 1) * sizeof(unsigned char));
+  unsigned char *upperBounds2 =
+      (unsigned char *)malloc((regions2 + 1) * sizeof(unsigned char));
+  unsigned char *upperBounds3 =
+      (unsigned char *)malloc((regions3 + 1) * sizeof(unsigned char));
+  unsigned char *centroids1 =
+      (unsigned char *)malloc((regions1) * sizeof(unsigned char));
+  unsigned char *centroids2 =
+      (unsigned char *)malloc((regions2) * sizeof(unsigned char));
+  unsigned char *centroids3 =
+      (unsigned char *)malloc((regions3) * sizeof(unsigned char));
+
+  // Create regions
+  nonUniformRegions(inData, upperBounds1, centroids1, 0, q1, regions1);
+  nonUniformRegions(inData, upperBounds2, centroids2, 1, q2, regions2);
+  nonUniformRegions(inData, upperBounds3, centroids3, 2, q3, regions3);
+
+  // Quantize
+  for (int i = 0; i < HEIGHT * WIDTH; i++) {
+    // Channel 1
+    for (int j = 1; j <= regions1; j++) {
+      if (inData[3*i] <= upperBounds1[j]) {
+        inData[3*i] = centroids1[j-1];
+        break;
+      }
+    }
+    
+    // Channel 2
+    for (int j = 1; j <= regions2; j++) {
+      if (inData[3*i+1] <= upperBounds2[j]) {
+        inData[3*i+1] = centroids2[j-1];
+        break;
+      }
+    }
+
+    // Channel 3
+    for (int j = 1; j <= regions3; j++) {
+      if (inData[3*i+2] <= upperBounds3[j]) {
+        inData[3*i+2] = centroids3[j-1];
+        break;
+      }
+    }
+  }
+
+  free(upperBounds1);
+  free(upperBounds2);
+  free(upperBounds3);
+  free(centroids1);
+  free(centroids2);
+  free(centroids3);
+}
+
+void nonUniformQuantizationF(float* inData, int q1, int q2, int q3) {
+  int regions1 = pow(2,q1);
+  int regions2 = pow(2,q2);
+  int regions3 = pow(2,q3);
+
+  float *upperBounds1 =
+      (float *)malloc((regions1 + 1) * sizeof(float));
+  float *upperBounds2 =
+      (float *)malloc((regions2 + 1) * sizeof(float));
+  float *upperBounds3 =
+      (float *)malloc((regions3 + 1) * sizeof(float));
+  float *centroids1 =
+      (float *)malloc((regions1) * sizeof(float));
+  float *centroids2 =
+      (float *)malloc((regions2) * sizeof(float));
+  float *centroids3 =
+      (float *)malloc((regions3) * sizeof(float));
+
+  // Create regions
+  nonUniformRegionsF(inData, upperBounds1, centroids1, 0, q1, regions1, 0, 1);
+  nonUniformRegionsF(inData, upperBounds2, centroids2, 1, q2, regions2, -0.436f, 0.436f);
+  nonUniformRegionsF(inData, upperBounds3, centroids3, 2, q3, regions3, -0.615f, 0.615f);
+
+  // Quantize
+  for (int i = 0; i < HEIGHT * WIDTH; i++) {
+    // Channel 1
+    bool inRegion = false;
+    for (int j = 1; j <= regions1; j++) {
+      if (inData[3*i] <= upperBounds1[j]) {
+        inData[3*i] = centroids1[j-1];
+        inRegion = true;
+        break;
+      }
+    }
+    if (!inRegion) {
+      inData[3*i] = centroids1[regions1-1];
+    }
+    
+    // Channel 2
+    inRegion = false;
+    for (int j = 1; j <= regions2; j++) {
+      if (inData[3*i+1] <= upperBounds2[j]) {
+        inData[3*i+1] = centroids2[j-1];
+        inRegion = true;
+        break;
+      }
+    }
+    if (!inRegion) {
+      inData[3*i+1] = centroids2[regions2-1];
+    }
+
+    // Channel 3
+    inRegion = false;
+    for (int j = 1; j <= regions3; j++) {
+      if (inData[3*i+2] <= upperBounds3[j]) {
+        inData[3*i+2] = centroids3[j-1];
+        inRegion = true;
+        break;
+      }
+    }
+    if (!inRegion) {
+      inData[3*i+2] = centroids3[regions3-1];
+    }
+  }
+
+  free(upperBounds1);
+  free(upperBounds2);
+  free(upperBounds3);
+  free(centroids1);
+  free(centroids2);
+  free(centroids3);
 }
 
 /**
