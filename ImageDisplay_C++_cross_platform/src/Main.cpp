@@ -558,6 +558,7 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
   unsigned char *originalData = readImageData(imagePath, WIDTH, HEIGHT);
   unsigned char *mergedData =
       (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
+  float error = 0;
       
   // Iterate row by row
   for (int row = 0; row < HEIGHT; row++) {
@@ -575,8 +576,15 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
           mergedData[mergedIndex]     = inData[inIndex];
           mergedData[mergedIndex + 1] = inData[inIndex + 1];
           mergedData[mergedIndex + 2] = inData[inIndex + 2];
+
+          error += abs(originalData[originalIndex] / 255.f - inData[inIndex] / 255.f);
+          error += abs(originalData[originalIndex+1] / 255.f - inData[inIndex+1] / 255.f);
+          error += abs(originalData[originalIndex+2] / 255.f - inData[inIndex+2] / 255.f);
       }
   }
+
+  cout << "Normalized error: " << error << endl;
+
   free(inData);
   free(originalData);
 
