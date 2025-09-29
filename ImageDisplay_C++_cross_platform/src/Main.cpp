@@ -70,33 +70,36 @@ void medianCutF(vector<float>& upperBounds, const vector<float>& sortedChannel, 
 bool MyApp::OnInit() {
   wxInitAllImageHandlers();
 
-  // deal with command line arguments here
-  cout << "Number of command line arguments: " << wxApp::argc << endl;
-  if (wxApp::argc != 7) {
-    cerr << "The executable should be invoked with exactly 6 arguments: "
-            "YourProgram.exe C:/myDir/myImage.rgb C M Q1 Q2 Q3"
-         << endl;
-    exit(1);
-  }
-  cout << "First argument: " << wxApp::argv[0] << endl;
-  cout << "Second argument: " << wxApp::argv[1] << endl;
-  cout << "Third argument: " << wxApp::argv[2] << endl;
-  cout << "Fourth argument: " << wxApp::argv[3] << endl;
-  cout << "Fifth argument: " << wxApp::argv[4] << endl;
-  cout << "Sixth argument: " << wxApp::argv[5] << endl;
-  cout << "Seventh argument: " << wxApp::argv[6] << endl;
-  string imagePath = wxApp::argv[1].ToStdString();
-  int colorMode = stoi(wxApp::argv[2].ToStdString());
-  int quantizationMode = stoi(wxApp::argv[3].ToStdString());
-  int q1 = stoi(wxApp::argv[4].ToStdString());
-  int q2 = stoi(wxApp::argv[5].ToStdString());
-  int q3 = stoi(wxApp::argv[6].ToStdString());
+  string imagePath = "../../mountain_352x288.rgb";
 
-  //MyFrame *frame = new MyFrame("Image Display", imagePath);
-  //frame->Show(true);
+  ifstream inputFile("../src/Inputs.txt");
+  // Read the whole file into a string
+  std::stringstream buffer;
+  buffer << inputFile.rdbuf();
+  std::string fileContents = buffer.str();
+
+  std::istringstream iss(fileContents);
+  std::string line;
+
+  while (std::getline(iss, line)) {
+    if (line.empty()) {
+      cout << endl;
+      continue;
+    }
+    
+    int colorMode;
+    int quantizationMode;
+    int q1;
+    int q2;
+    int q3;
+
+    if (!line.empty() && line.front() == '<') line.erase(0, 1);
+    if (!line.empty() && line.back() == '>') line.pop_back();
+    char comma; // to eat the commas
+    std::stringstream ss(line);
+    ss >> colorMode >> comma >> quantizationMode >> comma >> q1 >> comma >> q2 >> comma >> q3;
 
   unsigned char *inData = readImageData(imagePath, WIDTH, HEIGHT);
-  cout << "Original: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
 
   // C
   if (colorMode == 1) {
@@ -109,7 +112,6 @@ bool MyApp::OnInit() {
   }
   if (colorMode == 2) {
     float *data = normalizeImageData(inData, WIDTH, HEIGHT);
-    cout << "After normalization: " << data[3 * DEBUG_X * DEBUG_Y] << ", " << data[3 * DEBUG_X * DEBUG_Y + 1] << ", " << data[3 * DEBUG_X * DEBUG_Y + 2] << endl; 
 
     // RGB to YUV
     for (int i = 0; i < WIDTH * HEIGHT; i++) {
@@ -120,7 +122,6 @@ bool MyApp::OnInit() {
       data[3 * i + 1] = u;
       data[3 * i + 2] = v;
     }
-    cout << "In YUV: " << data[0] << ", " << data[1] << ", " << data[2] << endl; 
 
     if (quantizationMode == 1) {
       uniformQuantization(data, q1, q2, q3);
@@ -128,7 +129,6 @@ bool MyApp::OnInit() {
     else {
       nonUniformQuantizationF(data, q1, q2, q3);
     }
-    cout << "In YUV after quantization: " << data[3 * DEBUG_X * DEBUG_Y] << ", " << data[3 * DEBUG_X * DEBUG_Y + 1] << ", " << data[3 * DEBUG_X * DEBUG_Y + 2] << endl; 
 
     // YUV to RGB
     for (int i = 0; i < WIDTH * HEIGHT; i++) {
@@ -147,12 +147,13 @@ bool MyApp::OnInit() {
     free(data);
   }
 
-  cout << "After processing: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
   MyFrame *frame = new MyFrame("Image Display", imagePath, inData);
-  frame->Show(true);
+  delete(frame);
+}
 
   // return true to continue, false to exit the application
   return true;
+  
 }
 
 void uniformQuantization(unsigned char* inData, int q1, int q2, int q3) {
@@ -556,26 +557,16 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
     : wxFrame(NULL, wxID_ANY, title) {
 
   unsigned char *originalData = readImageData(imagePath, WIDTH, HEIGHT);
-  unsigned char *mergedData =
-      (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
   float error = 0;
       
   // Iterate row by row
   for (int row = 0; row < HEIGHT; row++) {
       for (int col = 0; col < WIDTH; col++) {
           // Left image
-          int mergedIndex = (row * WIDTH * 2 + col) * 3;
           int originalIndex = (row * WIDTH + col) * 3;
-          mergedData[mergedIndex]     = originalData[originalIndex];
-          mergedData[mergedIndex + 1] = originalData[originalIndex + 1];
-          mergedData[mergedIndex + 2] = originalData[originalIndex + 2];
 
           // Right image
-          mergedIndex = (row * WIDTH * 2 + (col + WIDTH)) * 3;
           int inIndex = (row * WIDTH + col) * 3;
-          mergedData[mergedIndex]     = inData[inIndex];
-          mergedData[mergedIndex + 1] = inData[inIndex + 1];
-          mergedData[mergedIndex + 2] = inData[inIndex + 2];
 
           error += abs(originalData[originalIndex] / 255.f - inData[inIndex] / 255.f);
           error += abs(originalData[originalIndex+1] / 255.f - inData[inIndex+1] / 255.f);
@@ -583,30 +574,10 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
       }
   }
 
-  cout << "Normalized error: " << error << endl;
+  cout << error << endl;
 
   free(inData);
   free(originalData);
-
-  // the last argument is static_data, if it is false, after this call the
-  // pointer to the data is owned by the wxImage object, which will be
-  // responsible for deleting it. So this means that you should not delete the
-  // data yourself.
-  inImage.SetData(mergedData, WIDTH * 2, HEIGHT, false);
-
-  // Set up the scrolled window as a child of this frame
-  scrolledWindow = new wxScrolledWindow(this, wxID_ANY);
-  scrolledWindow->SetScrollbars(10, 10, WIDTH * 2, HEIGHT);
-  scrolledWindow->SetVirtualSize(WIDTH * 2, HEIGHT);
-
-  // Bind the paint event to the OnPaint function of the scrolled window
-  scrolledWindow->Bind(wxEVT_PAINT, &MyFrame::OnPaint, this);
-
-  // Set the frame size
-  SetClientSize(WIDTH * 2, HEIGHT);
-
-  // Set the frame background color
-  SetBackgroundColour(*wxBLACK);
 }
 
 /**
