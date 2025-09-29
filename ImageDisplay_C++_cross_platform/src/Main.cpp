@@ -35,7 +35,7 @@ class MyApp : public wxApp {
 class MyFrame : public wxFrame {
  public:
   MyFrame(const wxString &title, string imagePath);
-  MyFrame(const wxString &title, unsigned char *inData);
+  MyFrame(const wxString &title, string imagePath, unsigned char *inData);
 
  private:
   void OnPaint(wxPaintEvent &event);
@@ -148,7 +148,7 @@ bool MyApp::OnInit() {
   }
 
   cout << "After processing: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
-  MyFrame *frame = new MyFrame("Image Display", inData);
+  MyFrame *frame = new MyFrame("Image Display", imagePath, inData);
   frame->Show(true);
 
   // return true to continue, false to exit the application
@@ -552,25 +552,50 @@ MyFrame::MyFrame(const wxString &title, string imagePath)
   SetBackgroundColour(*wxBLACK);
 }
 
-MyFrame::MyFrame(const wxString &title, unsigned char* inData)
+MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
     : wxFrame(NULL, wxID_ANY, title) {
+
+  unsigned char *originalData = readImageData(imagePath, WIDTH, HEIGHT);
+  unsigned char *mergedData =
+      (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
+      
+  // Iterate row by row
+  for (int row = 0; row < HEIGHT; row++) {
+      for (int col = 0; col < WIDTH; col++) {
+          // Left image
+          int mergedIndex = (row * WIDTH * 2 + col) * 3;
+          int originalIndex = (row * WIDTH + col) * 3;
+          mergedData[mergedIndex]     = originalData[originalIndex];
+          mergedData[mergedIndex + 1] = originalData[originalIndex + 1];
+          mergedData[mergedIndex + 2] = originalData[originalIndex + 2];
+
+          // Right image
+          mergedIndex = (row * WIDTH * 2 + (col + WIDTH)) * 3;
+          int inIndex = (row * WIDTH + col) * 3;
+          mergedData[mergedIndex]     = inData[inIndex];
+          mergedData[mergedIndex + 1] = inData[inIndex + 1];
+          mergedData[mergedIndex + 2] = inData[inIndex + 2];
+      }
+  }
+  free(inData);
+  free(originalData);
 
   // the last argument is static_data, if it is false, after this call the
   // pointer to the data is owned by the wxImage object, which will be
   // responsible for deleting it. So this means that you should not delete the
   // data yourself.
-  inImage.SetData(inData, WIDTH, HEIGHT, false);
+  inImage.SetData(mergedData, WIDTH * 2, HEIGHT, false);
 
   // Set up the scrolled window as a child of this frame
   scrolledWindow = new wxScrolledWindow(this, wxID_ANY);
-  scrolledWindow->SetScrollbars(10, 10, WIDTH, HEIGHT);
-  scrolledWindow->SetVirtualSize(WIDTH, HEIGHT);
+  scrolledWindow->SetScrollbars(10, 10, WIDTH * 2, HEIGHT);
+  scrolledWindow->SetVirtualSize(WIDTH * 2, HEIGHT);
 
   // Bind the paint event to the OnPaint function of the scrolled window
   scrolledWindow->Bind(wxEVT_PAINT, &MyFrame::OnPaint, this);
 
   // Set the frame size
-  SetClientSize(WIDTH, HEIGHT);
+  SetClientSize(WIDTH * 2, HEIGHT);
 
   // Set the frame background color
   SetBackgroundColour(*wxBLACK);
