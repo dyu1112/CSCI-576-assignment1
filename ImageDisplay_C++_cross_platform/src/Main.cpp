@@ -15,8 +15,8 @@ namespace fs = std::filesystem;
  */
 
 /** Declarations*/
-const int WIDTH = 512;
-const int HEIGHT = 512;
+const int WIDTH = 352;
+const int HEIGHT = 288;
 const int DEBUG_X = 0;
 const int DEBUG_Y = 0;
 
