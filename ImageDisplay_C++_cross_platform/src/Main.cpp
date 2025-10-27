@@ -81,10 +81,9 @@ void convertToImageData(unsigned char* imageData, double*** rBlocks, double*** g
 double*** create3DArray();
 void free3DArray(double*** blocks);
 
-void Decode(double*** blocksf, double*** blocksF, int block, int x, int y);
+void Decode(double** blockf, double** blockF, int N);
 void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int coefficient);
-void DecodeSuccesssiveBitApprox(double*** blocksf, double*** blocksF, int block, int x, int y, int sigBit);
-
+void DecodeSuccesssiveBitApprox(double** blocksf, double** blocksF, int N, int sigbit);
 
 /** Definitions */
 
@@ -156,43 +155,49 @@ MyTimer::MyTimer(MyFrame* frame, unsigned char* inData, int M, int N, int L)
 
   cout << "Finished Encoding. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
 
-  // Dequantize
-  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-    for (int u = 0; u < 8; u++) {
-      for (int v = 0; v < 8; v++) {
-        // Dequantize
-        rBlocksF[block][u][v] *= pow(2.0f, N);
-        gBlocksF[block][u][v] *= pow(2.0f, N);
-        bBlocksF[block][u][v] *= pow(2.0f, N);
-      }
-    }
-  }
-
   // Initialize black image
   outData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * sizeof(unsigned char));
   for (int i = 0; i < WIDTH * HEIGHT * 3; i++) {
     outData[i] = 0;
   }
-
-  cout << "Finished Dequantizing. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
   Start(L);
 }
 
 void MyTimer::Notify() {
   // Sequential Mode
-  if (M = 1) {
+  if (M == 1) {
     // Decode
     if (currentBlock < WIDTH * HEIGHT / 64) {
-      for (int x = 0; x < 8; x++) {
-        for (int y = 0; y < 8; y++) {
-          Decode(rBlocksf, rBlocksF, currentBlock, x, y);
-          Decode(gBlocksf, gBlocksF, currentBlock, x, y);
-          Decode(bBlocksf, bBlocksF, currentBlock, x, y);
-        }
-      }
+      Decode(rBlocksf[currentBlock], rBlocksF[currentBlock], N);
+      Decode(gBlocksf[currentBlock], gBlocksF[currentBlock], N);
+      Decode(bBlocksf[currentBlock], bBlocksF[currentBlock], N);
+
       convertToImageData(outData, rBlocksf,gBlocksf,bBlocksf, currentBlock);
       frame->ChangeImage(outData);
       currentBlock++;
+    }
+    else {
+      cout << "Finished Decoding. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
+      Stop();
+      delete this;
+    }
+  }
+  else if (M == 2) {
+
+  }
+  // Successive Bit Approximation
+  else if (M == 3) {
+    // Decode
+    if (currentSigBit <= 8) {
+      for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+        DecodeSuccesssiveBitApprox(rBlocksf[block], rBlocksF[block], N, currentSigBit);
+        DecodeSuccesssiveBitApprox(gBlocksf[block], gBlocksF[block], N, currentSigBit);
+        DecodeSuccesssiveBitApprox(bBlocksf[block], bBlocksF[block], N, currentSigBit);
+      }
+      
+      convertToImageData(outData, rBlocksf,gBlocksf,bBlocksf, WIDTH * HEIGHT / 64);
+      frame->ChangeImage(outData);
+      currentSigBit++;
     }
     else {
       cout << "Finished Decoding. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
@@ -213,12 +218,52 @@ MyTimer::~MyTimer() {
   free(frame->originalData);
 }
 
-void Decode(double*** blocksf, double*** blocksF, int block, int x, int y) {
-  blocksf[block][x][y] = IDCT(x,y,blocksF[block]);
+void Decode(double** blockf, double** blockF, int N) {
+  // Dequantize
+  for (int u = 0; u < 8; u++) {
+    for (int v = 0; v < 8; v++) {
+      blockF[u][v] *= pow(2.0f, N);
+    }
+  }
+  
+  // IDCT
+  for (int x = 0; x < 8; x++) {
+    for (int y = 0; y < 8; y++) {
+      blockf[x][y] = IDCT(x,y,blockF);
+    }
+  }
 }
 
-void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int coefficient);
-void DecodeSuccesssiveBitApprox(double*** blocksf, double*** blocksF, int block, int x, int y, int sigbit);
+void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int N, int coefficient) {
+  
+}
+void DecodeSuccesssiveBitApprox(double** blockf, double** blockF, int N, int sigbit) {
+  double** copyF = (double**)malloc(8 * sizeof(double*));
+  for (int row = 0; row < 8; row++) {
+    copyF[row] = (double*)malloc(8 * sizeof(double));
+    for (int col = 0; col < 8; col++) {
+      copyF[row][col] = blockF[row][col];
+    }
+  }
+
+  Decode(blockf, copyF, N);
+
+  // Get significant bits
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      if (sigbit < 8) {
+        unsigned char encodedChannel = clamp<double>(blockf[i][j], 0.0, 255.0);
+        unsigned char mask = 0xFF << (8 - sigbit);
+        blockf[i][j] = (unsigned char)(encodedChannel & mask);
+      }
+    }
+  }
+
+  for (int row = 0; row < 8; row++) {
+    free(copyF[row]);
+  }
+  free(copyF);
+}
 
 double C(int k) 
 {
