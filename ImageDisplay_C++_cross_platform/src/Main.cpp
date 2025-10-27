@@ -45,20 +45,14 @@ class MyFrame : public wxFrame {
 
 /** Utility function to read image data */
 unsigned char *readImageData(string imagePath, int width, int height);
+float DCT(int u, int v, unsigned char** f);
+float IDCT(int x, int y, unsigned char** F);
+float C(int k);
 
-/** Utility function to read image data */
-float *normalizeImageData(unsigned char *inData, int width, int height);
+unsigned char*** convertToBlocks(unsigned char* imageData, int channel);
+unsigned char* convertToImageData(unsigned char*** rBlocks, unsigned char*** gBlocks, unsigned char*** bBlocks);
+void free3DArray(unsigned char*** blocks);
 
-void uniformQuantization(unsigned char* inData, int q1, int q2, int q3);
-void uniformQuantization(float* inData, int q1, int q2, int q3);
-
-void nonUniformQuantization(unsigned char* inData, int q1, int q2, int q3);
-void nonUniformQuantizationF(float* inData, int q1, int q2, int q3);
-
-void nonUniformRegions(unsigned char* inData, unsigned char* upperBounds, unsigned char* centroids, int channel, int q, int regions);
-void nonUniformRegionsF(float* inData, float* upperBounds, float* centroids, int channel, int q, int regions, float minBound, float maxBound);
-void medianCut(vector<unsigned char>& upperBounds, const vector<unsigned char>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices);
-void medianCutF(vector<float>& upperBounds, const vector<float>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices);
 
 /** Definitions */
 
@@ -72,9 +66,9 @@ bool MyApp::OnInit() {
 
   // deal with command line arguments here
   cout << "Number of command line arguments: " << wxApp::argc << endl;
-  if (wxApp::argc != 7) {
-    cerr << "The executable should be invoked with exactly 6 arguments: "
-            "YourProgram.exe C:/myDir/myImage.rgb C M Q1 Q2 Q3"
+  if (wxApp::argc != 5) {
+    cerr << "The executable should be invoked with exactly 5 arguments: "
+            "./MyImageApplication InputImage quantizationLevel DeliveryMode Latency"
          << endl;
     exit(1);
   }
@@ -83,21 +77,25 @@ bool MyApp::OnInit() {
   cout << "Third argument: " << wxApp::argv[2] << endl;
   cout << "Fourth argument: " << wxApp::argv[3] << endl;
   cout << "Fifth argument: " << wxApp::argv[4] << endl;
-  cout << "Sixth argument: " << wxApp::argv[5] << endl;
-  cout << "Seventh argument: " << wxApp::argv[6] << endl;
   string imagePath = wxApp::argv[1].ToStdString();
-  int colorMode = stoi(wxApp::argv[2].ToStdString());
-  int quantizationMode = stoi(wxApp::argv[3].ToStdString());
-  int q1 = stoi(wxApp::argv[4].ToStdString());
-  int q2 = stoi(wxApp::argv[5].ToStdString());
-  int q3 = stoi(wxApp::argv[6].ToStdString());
-
-  //MyFrame *frame = new MyFrame("Image Display", imagePath);
-  //frame->Show(true);
+  int N = stoi(wxApp::argv[2].ToStdString()); // Quantization level, Range [0,7]
+  int M = stoi(wxApp::argv[3].ToStdString()); // Delivery Mode, Range [1,3]
+  int L = stoi(wxApp::argv[4].ToStdString()); // Latency in milliseconds
 
   unsigned char *inData = readImageData(imagePath, WIDTH, HEIGHT);
-  cout << "Original: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
+  //cout << "Original: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
 
+  unsigned char*** rBlocks = convertToBlocks(inData, 0);
+  unsigned char*** gBlocks = convertToBlocks(inData, 1);
+  unsigned char*** bBlocks = convertToBlocks(inData, 2);
+  free(inData);
+
+  unsigned char *outData = convertToImageData(rBlocks,gBlocks,bBlocks);
+  free3DArray(rBlocks);
+  free3DArray(gBlocks);
+  free3DArray(bBlocks);
+
+  /*
   // C
   if (colorMode == 1) {
     if (quantizationMode == 1) {
@@ -146,377 +144,50 @@ bool MyApp::OnInit() {
     }
     free(data);
   }
+  */
 
-  cout << "After processing: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
-  MyFrame *frame = new MyFrame("Image Display", imagePath, inData);
+  //cout << "After processing: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
+  MyFrame *frame = new MyFrame("Image Display", imagePath, outData);
   frame->Show(true);
 
   // return true to continue, false to exit the application
   return true;
 }
 
-void uniformQuantization(unsigned char* inData, int q1, int q2, int q3) {
-  int regions1 = pow(2,q1);
-  int regions2 = pow(2,q2);
-  int regions3 = pow(2,q3);
-
-  unsigned char *upperBounds1 =
-      (unsigned char *)malloc((regions1 + 1) * sizeof(unsigned char));
-  unsigned char *upperBounds2 =
-      (unsigned char *)malloc((regions2 + 1) * sizeof(unsigned char));
-  unsigned char *upperBounds3 =
-      (unsigned char *)malloc((regions3 + 1) * sizeof(unsigned char));
-
-  // Create regions
-  for (int i = 1; i <= regions1; i++) {
-    upperBounds1[i] = 255.f / regions1 * i;
+float C(int k) 
+{
+  if (k == 0) {
+    return 1.0f / sqrtf(k);
   }
-  upperBounds1[0] = 0;
-  upperBounds1[regions1] = 255;
-
-  for (int i = 1; i <= regions2; i++) {
-    upperBounds2[i] = 255.f / regions2 * i;
-  }
-  upperBounds2[0] = 0;
-  upperBounds2[regions2] = 255;
-
-  for (int i = 1; i <= regions3; i++) {
-    upperBounds3[i] = 255.f / regions3 * i;
-  }
-  upperBounds3[0] = 0;
-  upperBounds3[regions3] = 255;
-
-  // Quantize
-  for (int i = 0; i < HEIGHT * WIDTH; i++) {
-    // Channel 1
-    for (int j = 1; j <= regions1; j++) {
-      if (inData[3*i] <= upperBounds1[j]) {
-        inData[3*i] = (upperBounds1[j] + upperBounds1[j-1]) / 2;
-        break;
-      }
-    }
-    
-    // Channel 2
-    for (int j = 1; j <= regions2; j++) {
-      if (inData[3*i+1] <= upperBounds2[j]) {
-        inData[3*i+1] = (upperBounds2[j] + upperBounds2[j-1]) / 2;
-        break;
-      }
-    }
-
-    // Channel 3
-    for (int j = 1; j <= regions3; j++) {
-      if (inData[3*i+2] <= upperBounds3[j]) {
-        inData[3*i+2] = (upperBounds3[j] + upperBounds3[j-1]) / 2;
-        break;
-      }
-    }
-  }
-
-  free(upperBounds1);
-  free(upperBounds2);
-  free(upperBounds3);
-}
-
-void uniformQuantization(float* inData, int q1, int q2, int q3) {
-  int regions1 = pow(2,q1);
-  int regions2 = pow(2,q2);
-  int regions3 = pow(2,q3);
-
-  float *upperBounds1 =
-      (float *)malloc((regions1 + 1) * sizeof(float));
-  float *upperBounds2 =
-      (float *)malloc((regions2 + 1) * sizeof(float));
-  float *upperBounds3 =
-      (float *)malloc((regions3 + 1) * sizeof(float));
-
-  // Create regions
-  for (int i = 1; i <= regions1; i++) {
-    upperBounds1[i] = 1.f / regions1 * i;
-  }
-  upperBounds1[0] = 0.f;
-  upperBounds1[regions1] = 1.f;
-
-  for (int i = 0; i <= regions2; i++) {
-    upperBounds2[i] = (0.436f * 2) / regions2 * i - 0.436f;
-  }
-  upperBounds2[regions2] = 0.436f;
-
-  for (int i = 0; i <= regions3; i++) {
-    upperBounds3[i] = (0.615f * 2) / regions2 * i - 0.615f;
-  }
-  upperBounds3[regions3] = 0.615f;
-
-  // Quantize
-  for (int i = 0; i < HEIGHT * WIDTH; i++) {
-    // Channel 1
-    bool inRegion = false;
-    for (int j = 1; j <= regions1; j++) {
-      if (inData[3*i] <= upperBounds1[j]) {
-        inData[3*i] = (upperBounds1[j] + upperBounds1[j-1]) / 2;
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) {
-      inData[3*i] = (upperBounds1[regions1] + upperBounds1[regions1-1]) / 2;
-    }
-    
-    // Channel 2
-    inRegion = false;
-    for (int j = 1; j <= regions2; j++) {
-      if (inData[3*i+1] <= upperBounds2[j]) {
-        inData[3*i+1] = (upperBounds2[j] + upperBounds2[j-1]) / 2;
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) {
-      inData[3*i+1] = (upperBounds2[regions2] + upperBounds2[regions2-1]) / 2;
-    }
-
-    // Channel 3
-    inRegion = false;
-    for (int j = 1; j <= regions3; j++) {
-      if (inData[3*i+2] <= upperBounds3[j]) {
-        inData[3*i+2] = (upperBounds3[j] + upperBounds3[j-1]) / 2;
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) {
-      inData[3*i+2] = (upperBounds3[regions3] + upperBounds3[regions3-1]) / 2;
-    }
-  }
-
-  free(upperBounds1);
-  free(upperBounds2);
-  free(upperBounds3);
-}
-
-void nonUniformRegions(unsigned char* inData, unsigned char* upperBounds, unsigned char* centroids, int channel, int q, int regions) {
-  vector<unsigned char> sortedChannel(WIDTH*HEIGHT);
-  vector<unsigned char> sortedUpperBounds = {};
-  vector<int> biasIndices = {};
-  sortedUpperBounds.push_back(0); // Min
-  
-  for (int i = 0; i < HEIGHT * WIDTH; i++) {
-    sortedChannel[i] = inData[3*i+channel];
-  }
-  sort(sortedChannel.begin(), sortedChannel.end());
-
-  medianCut(sortedUpperBounds, sortedChannel, 0, WIDTH*HEIGHT, q, biasIndices);
-  sort(sortedUpperBounds.begin(), sortedUpperBounds.end());
-  for (int i = 0; i < regions; i++) {
-    upperBounds[i] = sortedUpperBounds[i];
-  }
-  upperBounds[regions] = 1; // Max
-
-  biasIndices.push_back(0);
-  biasIndices.push_back(WIDTH * HEIGHT);
-  sort(biasIndices.begin(), biasIndices.end());
-  for (int i = 0; i < biasIndices.size() - 1; i++) {
-    int count = 0;
-    int total = 0;
-
-    for (int j = biasIndices[i]; j < biasIndices[i+1]; j++) {
-      count++;
-      total += sortedChannel[j];
-    }
-    centroids[i] = total / count;
+  else {
+    return 1.0f;
   }
 }
 
-void nonUniformRegionsF(float* inData, float* upperBounds, float* centroids, int channel, int q, int regions, float minBound, float maxBound) {
-  vector<float> sortedChannel(WIDTH*HEIGHT);
-  vector<float> sortedUpperBounds = {};
-  vector<int> biasIndices = {};
-  sortedUpperBounds.push_back(minBound); // Min
-
-  for (int i = 0; i < HEIGHT * WIDTH; i++) {
-    sortedChannel[i] = inData[3*i+channel];
-  }
-  sort(sortedChannel.begin(), sortedChannel.end());
-
-  medianCutF(sortedUpperBounds, sortedChannel, 0, WIDTH*HEIGHT, q, biasIndices);
-  sort(sortedUpperBounds.begin(), sortedUpperBounds.end());
-  for (int i = 0; i < regions; i++) {
-    upperBounds[i] = sortedUpperBounds[i];
-  }
-  upperBounds[regions] = maxBound; // Max
-
-  biasIndices.push_back(0);
-  biasIndices.push_back(WIDTH * HEIGHT);
-  sort(biasIndices.begin(), biasIndices.end());
-  for (int i = 0; i < biasIndices.size() - 1; i++) {
-    int count = 0;
-    float total = 0;
-
-    for (int j = biasIndices[i]; j < biasIndices[i+1]; j++) {
-      count++;
-      total += sortedChannel[j];
+float DCT(int u, int v, unsigned char** f) 
+{
+  float result = (1.0f/4.0f) * C(u) * C(v);
+  float sum = 0.0f;
+  for (int x = 0; x < 8; x++) {
+    for (int y = 0; y < 8; y++) {
+      sum += f[x][y] * cosf(((2.0f*x + 1.0f) * u * M_PI) / 16.0f) * cosf(((2.0f*y + 1.0f) * v * M_PI) / 16.0f);
     }
-    centroids[i] = total / count;
   }
+
+  return result * sum;
 }
 
-// lowerBound is inclusive
-// upperBound is exclusive
-void medianCut(vector<unsigned char>& upperBounds, const vector<unsigned char>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices) {
-  if (q == 0) {
-    return;
-  }
-
-  int bias = (upperBound + lowerBound) / 2;
-  biasIndices.push_back(bias);
-  upperBounds.push_back(sortedChannel[bias]);
-
-  medianCut(upperBounds, sortedChannel, lowerBound, bias, q-1, biasIndices);
-  medianCut(upperBounds, sortedChannel, bias, upperBound, q-1, biasIndices);
-}
-
-void medianCutF(vector<float>& upperBounds, const vector<float>& sortedChannel, int lowerBound, int upperBound, int q, vector<int>& biasIndices) {
-  if (q == 0) {
-    return;
-  }
-
-  int bias = (upperBound + lowerBound) / 2;
-  biasIndices.push_back(bias);
-  upperBounds.push_back(sortedChannel[bias]);
-
-  medianCutF(upperBounds, sortedChannel, lowerBound, bias, q-1, biasIndices);
-  medianCutF(upperBounds, sortedChannel, bias, upperBound, q-1, biasIndices);
-}
-
-void nonUniformQuantization(unsigned char* inData, int q1, int q2, int q3) {
-  int regions1 = pow(2,q1);
-  int regions2 = pow(2,q2);
-  int regions3 = pow(2,q3);
-
-  unsigned char *upperBounds1 =
-      (unsigned char *)malloc((regions1 + 1) * sizeof(unsigned char));
-  unsigned char *upperBounds2 =
-      (unsigned char *)malloc((regions2 + 1) * sizeof(unsigned char));
-  unsigned char *upperBounds3 =
-      (unsigned char *)malloc((regions3 + 1) * sizeof(unsigned char));
-  unsigned char *centroids1 =
-      (unsigned char *)malloc((regions1) * sizeof(unsigned char));
-  unsigned char *centroids2 =
-      (unsigned char *)malloc((regions2) * sizeof(unsigned char));
-  unsigned char *centroids3 =
-      (unsigned char *)malloc((regions3) * sizeof(unsigned char));
-
-  // Create regions
-  nonUniformRegions(inData, upperBounds1, centroids1, 0, q1, regions1);
-  nonUniformRegions(inData, upperBounds2, centroids2, 1, q2, regions2);
-  nonUniformRegions(inData, upperBounds3, centroids3, 2, q3, regions3);
-
-  // Quantize
-  for (int i = 0; i < HEIGHT * WIDTH; i++) {
-    // Channel 1
-    for (int j = 1; j <= regions1; j++) {
-      if (inData[3*i] <= upperBounds1[j]) {
-        inData[3*i] = centroids1[j-1];
-        break;
-      }
-    }
-    
-    // Channel 2
-    for (int j = 1; j <= regions2; j++) {
-      if (inData[3*i+1] <= upperBounds2[j]) {
-        inData[3*i+1] = centroids2[j-1];
-        break;
-      }
-    }
-
-    // Channel 3
-    for (int j = 1; j <= regions3; j++) {
-      if (inData[3*i+2] <= upperBounds3[j]) {
-        inData[3*i+2] = centroids3[j-1];
-        break;
-      }
+float IDCT(int x, int y, unsigned char** F)
+{
+  float result = 1.0f / 4.0f;
+  float sum = 0.0f;
+  for (int u = 0; u < 8; x++) {
+    for (int v = 0; v < 8; y++) {
+      sum += C(u) * C(v) * F[u][v] * cosf(((2.0f*x + 1.0f) * u * M_PI) / 16.0f) * cosf(((2.0f*y + 1.0f) * v * M_PI) / 16.0f);
     }
   }
 
-  free(upperBounds1);
-  free(upperBounds2);
-  free(upperBounds3);
-  free(centroids1);
-  free(centroids2);
-  free(centroids3);
-}
-
-void nonUniformQuantizationF(float* inData, int q1, int q2, int q3) {
-  int regions1 = pow(2,q1);
-  int regions2 = pow(2,q2);
-  int regions3 = pow(2,q3);
-
-  float *upperBounds1 =
-      (float *)malloc((regions1 + 1) * sizeof(float));
-  float *upperBounds2 =
-      (float *)malloc((regions2 + 1) * sizeof(float));
-  float *upperBounds3 =
-      (float *)malloc((regions3 + 1) * sizeof(float));
-  float *centroids1 =
-      (float *)malloc((regions1) * sizeof(float));
-  float *centroids2 =
-      (float *)malloc((regions2) * sizeof(float));
-  float *centroids3 =
-      (float *)malloc((regions3) * sizeof(float));
-
-  // Create regions
-  nonUniformRegionsF(inData, upperBounds1, centroids1, 0, q1, regions1, 0, 1);
-  nonUniformRegionsF(inData, upperBounds2, centroids2, 1, q2, regions2, -0.436f, 0.436f);
-  nonUniformRegionsF(inData, upperBounds3, centroids3, 2, q3, regions3, -0.615f, 0.615f);
-
-  // Quantize
-  for (int i = 0; i < HEIGHT * WIDTH; i++) {
-    // Channel 1
-    bool inRegion = false;
-    for (int j = 1; j <= regions1; j++) {
-      if (inData[3*i] <= upperBounds1[j]) {
-        inData[3*i] = centroids1[j-1];
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) {
-      inData[3*i] = centroids1[regions1-1];
-    }
-    
-    // Channel 2
-    inRegion = false;
-    for (int j = 1; j <= regions2; j++) {
-      if (inData[3*i+1] <= upperBounds2[j]) {
-        inData[3*i+1] = centroids2[j-1];
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) {
-      inData[3*i+1] = centroids2[regions2-1];
-    }
-
-    // Channel 3
-    inRegion = false;
-    for (int j = 1; j <= regions3; j++) {
-      if (inData[3*i+2] <= upperBounds3[j]) {
-        inData[3*i+2] = centroids3[j-1];
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) {
-      inData[3*i+2] = centroids3[regions3-1];
-    }
-  }
-
-  free(upperBounds1);
-  free(upperBounds2);
-  free(upperBounds3);
-  free(centroids1);
-  free(centroids2);
-  free(centroids3);
+  return result * sum;
 }
 
 /**
@@ -669,24 +340,68 @@ unsigned char *readImageData(string imagePath, int width, int height) {
   return inData;
 }
 
-float *normalizeImageData(unsigned char *inData, int width, int height) {
-  /**
-   * Allocate a buffer to store the pixel values
-   * The data must be allocated with malloc(), NOT with operator new. wxWidgets
-   * library requires this.
-   */
-  float *outData =
-      (float *)malloc(width * height * 3 * sizeof(float));
-      
-  for (int i = 0; i < height * width; i++) {
-    // We populate RGB values of each pixel in that order
-    // RGB.RGB.RGB and so on for all pixels
-    outData[3 * i] = inData[3 * i] / 255.0f;
-    outData[3 * i + 1] = inData[3 * i + 1] / 255.0f;
-    outData[3 * i + 2] = inData[3 * i + 2] / 255.0f;
+unsigned char*** convertToBlocks(unsigned char* imageData, int channel) {
+  // Create a 3D array of 8x8 blocks
+  unsigned char ***blocks = (unsigned char ***)malloc(WIDTH * HEIGHT / 64 * sizeof(unsigned char**));
+  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+    blocks[block] = (unsigned char**)malloc(8 * sizeof(unsigned char*));
+    for (int row = 0; row < 8; row++) {
+      blocks[block][row] = (unsigned char*)malloc(8 * sizeof(unsigned char));
+    }
   }
 
-  return outData;
+  int numBlocksX = WIDTH / 8;
+
+  for (int row = 0; row < HEIGHT; row++) {
+    for (int col = 0; col < WIDTH; col++) {
+      int blockX = col / 8;
+      int blockY = row / 8;
+
+      int x = col % 8;
+      int y = row % 8;
+      int block = numBlocksX * blockY + blockX;
+
+      blocks[block][y][x] = imageData[(row * WIDTH + col) * 3 + channel];
+    }
+  }
+
+  return blocks;
+}
+
+unsigned char* convertToImageData(unsigned char*** rBlocks, unsigned char*** gBlocks, unsigned char*** bBlocks) {
+  unsigned char *imageData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * sizeof(unsigned char));
+
+  int numBlocksX = WIDTH / 8;
+  int numBlocksY = HEIGHT / 8;
+
+  for (int blockY = 0; blockY < numBlocksY; blockY++) {
+    for (int blockX = 0; blockX < numBlocksX; blockX++) {
+      int block = numBlocksX * blockY + blockX;
+
+      for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+          int col = blockX * 8 + x;
+          int row = blockY * 8 + y;
+
+          imageData[(row * WIDTH + col) * 3] = rBlocks[block][y][x];
+          imageData[(row * WIDTH + col) * 3 + 1] = gBlocks[block][y][x];
+          imageData[(row * WIDTH + col) * 3 + 2] = bBlocks[block][y][x];
+        }
+      }
+    }
+  }
+
+  return imageData;
+}
+
+void free3DArray(unsigned char*** blocks) {
+  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+    for (int row = 0; row < 8; row++) {
+      free(blocks[block][row]);
+    }
+    free(blocks[block]);
+  }
+  free(blocks);
 }
 
 wxIMPLEMENT_APP(MyApp);
