@@ -66,6 +66,11 @@ private:
   double*** rBlocksF;
   double*** gBlocksF;
   double*** bBlocksF;
+
+  double*** rReceivedF;
+  double*** gReceivedF;
+  double*** bReceivedF;
+
   MyFrame* frame;
   unsigned char* outData;
   int M;
@@ -77,8 +82,8 @@ private:
   // int currentX;
   int currentCoefficient = 0;
   Direction currentDirection = Direction::East;
-  int currentX;
-  int currentY;
+  int currentX = 0;
+  int currentY = 0;
 
   int currentSigBit = 1;
 };
@@ -95,9 +100,9 @@ double*** create3DArray();
 void free3DArray(double*** blocks);
 
 void Decode(double** blockf, double** blockF, int N);
-void DecodeSpectral(double** blockf, double** blockF, int N, int coefficient, int x, int y, Direction direction);
-void DecodeSuccesssiveBitApprox(double** blocksf, double** blocksF, int N, int sigbit);
-void Zigzag(double** block, int coefficient);
+void DecodeSpectral(double** blockf, double** blockF, double** receivedF, int N, int x, int y);
+void DecodeSuccesssiveBitApprox(double** blockf, double** blockF, double** receivedF, int N, int sigbit);
+void Zigzag(int& currentX, int& currentY, Direction& currentDirection);
 
 /** Definitions */
 
@@ -174,6 +179,10 @@ MyTimer::MyTimer(MyFrame* frame, unsigned char* inData, int M, int N, int L)
   for (int i = 0; i < WIDTH * HEIGHT * 3; i++) {
     outData[i] = 0;
   }
+  rReceivedF = create3DArray();
+  gReceivedF = create3DArray();
+  bReceivedF = create3DArray();
+
   Start(L);
 }
 
@@ -200,11 +209,11 @@ void MyTimer::Notify() {
     // Decode
     if (currentCoefficient < 64) {
       for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-        DecodeSpectral(rBlocksf[block], rBlocksF[block], N, currentCoefficient, currentX, currentY, currentDirection);
-        DecodeSpectral(gBlocksf[block], gBlocksF[block], N, currentCoefficient, currentX, currentY, currentDirection);
-        DecodeSpectral(bBlocksf[block], bBlocksF[block], N, currentCoefficient, currentX, currentY, currentDirection);
+        DecodeSpectral(rBlocksf[block], rBlocksF[block], rReceivedF[block], N, currentX, currentY);
+        DecodeSpectral(gBlocksf[block], gBlocksF[block], gReceivedF[block], N, currentX, currentY);
+        DecodeSpectral(bBlocksf[block], bBlocksF[block], bReceivedF[block], N, currentX, currentY);
       }
-      
+      Zigzag(currentX, currentY, currentDirection);
       convertToImageData(outData, rBlocksf,gBlocksf,bBlocksf, WIDTH * HEIGHT / 64);
       frame->ChangeImage(outData);
       currentCoefficient++;
@@ -220,9 +229,9 @@ void MyTimer::Notify() {
     // Decode
     if (currentSigBit <= 8) {
       for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-        DecodeSuccesssiveBitApprox(rBlocksf[block], rBlocksF[block], N, currentSigBit);
-        DecodeSuccesssiveBitApprox(gBlocksf[block], gBlocksF[block], N, currentSigBit);
-        DecodeSuccesssiveBitApprox(bBlocksf[block], bBlocksF[block], N, currentSigBit);
+        DecodeSuccesssiveBitApprox(rBlocksf[block], rBlocksF[block], rReceivedF[block], N, currentSigBit);
+        DecodeSuccesssiveBitApprox(gBlocksf[block], gBlocksF[block], gReceivedF[block], N, currentSigBit);
+        DecodeSuccesssiveBitApprox(bBlocksf[block], bBlocksF[block], bReceivedF[block], N, currentSigBit);
       }
       
       convertToImageData(outData, rBlocksf,gBlocksf,bBlocksf, WIDTH * HEIGHT / 64);
@@ -246,6 +255,9 @@ MyTimer::~MyTimer() {
   free3DArray(bBlocksf);
   free(outData);
   free(frame->originalData);
+  free3DArray(rReceivedF);
+  free3DArray(gReceivedF);
+  free3DArray(bReceivedF);
 }
 
 void Decode(double** blockf, double** blockF, int N) {
@@ -264,17 +276,16 @@ void Decode(double** blockf, double** blockF, int N) {
   }
 }
 
-void DecodeSpectral(double** blockf, double** blockF, int N, int coefficient, int x, int y, Direction direction) {
+void DecodeSpectral(double** blockf, double** blockF, double** receivedF, int N, int x, int y) {
+  receivedF[x][y] = blockF[x][y];
+
   double** copyF = (double**)malloc(8 * sizeof(double*));
   for (int row = 0; row < 8; row++) {
     copyF[row] = (double*)malloc(8 * sizeof(double));
     for (int col = 0; col < 8; col++) {
-      copyF[row][col] = blockF[row][col];
+      copyF[row][col] = receivedF[row][col];
     }
   }
-
-  Zigzag(copyF, coefficient);
-
   Decode(blockf, copyF, N);
 
   for (int row = 0; row < 8; row++) {
@@ -283,74 +294,60 @@ void DecodeSpectral(double** blockf, double** blockF, int N, int coefficient, in
   free(copyF);
 }
 
-void Zigzag(double** block, int coefficient) {
-  int currentX = 0;
-  int currentY = 0;
-  Direction currentDirection = Direction::East;
-  int currentCoefficient = 0;
-
-  while (currentCoefficient < 64) {
-    if (currentCoefficient > coefficient) {
-      block[currentX][currentY] = 0;
-    }
-    
-    switch(currentDirection) {
-      case Direction::East:
-        currentX++;
-        if (currentY + 1 >= 8) {
-          currentDirection = Direction::Northeast;
-        }
-        else {
-          currentDirection = Direction::Southwest;
-        }
-        break;
-      case Direction::Southwest:
-        currentX--;
-        currentY++;
-        if (currentY + 1 >= 8) {
-          currentDirection = Direction::East;
-        }
-        if (currentX - 1 < 0) {
-          currentDirection = Direction::South;
-        }
-        break;
-      case Direction::South:
-        currentY++;
-        if (currentX + 1 >= 8) {
-          currentDirection = Direction::Southwest;
-        }
-        else {
-          currentDirection = Direction::Northeast;
-        }
-        break;
-      case Direction::Northeast:
-        currentX++;
-        currentY--;
-        if (currentX + 1 >= 8) {
-          currentDirection = Direction::South;
-        }
-        else if (currentY -1 < 0) {
-          currentDirection = Direction::East;
-        }
-        break;
-    }
-
-    currentCoefficient++;
-    //cout << "Zig zagged to x: " << currentX << ", y: " << currentY << endl;
+void Zigzag(int& currentX, int& currentY, Direction& currentDirection) { 
+  //cout << "x" << currentX << ", y" << currentY << endl;
+  
+  switch(currentDirection) {
+    case Direction::East:
+      currentX++;
+      if (currentY + 1 >= 8) {
+        currentDirection = Direction::Northeast;
+      }
+      else {
+        currentDirection = Direction::Southwest;
+      }
+      break;
+    case Direction::Southwest:
+      currentX--;
+      currentY++;
+      if (currentY + 1 >= 8) {
+        currentDirection = Direction::East;
+      }
+      if (currentX - 1 < 0) {
+        currentDirection = Direction::South;
+      }
+      break;
+    case Direction::South:
+      currentY++;
+      if (currentX + 1 >= 8) {
+        currentDirection = Direction::Southwest;
+      }
+      else {
+        currentDirection = Direction::Northeast;
+      }
+      break;
+    case Direction::Northeast:
+      currentX++;
+      currentY--;
+      if (currentX + 1 >= 8) {
+        currentDirection = Direction::South;
+      }
+      else if (currentY -1 < 0) {
+        currentDirection = Direction::East;
+      }
+      break;
   }
 }
 
-void DecodeSuccesssiveBitApprox(double** blockf, double** blockF, int N, int sigbit) {
-  double** copyF = (double**)malloc(8 * sizeof(double*));
-  for (int row = 0; row < 8; row++) {
-    copyF[row] = (double*)malloc(8 * sizeof(double));
-    for (int col = 0; col < 8; col++) {
-      copyF[row][col] = blockF[row][col];
+void DecodeSuccesssiveBitApprox(double** blockf, double** blockF, double** receivedF, int N, int sigbit) {
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      receivedF[i][j] = blockF[i][j];
     }
   }
-
-  Decode(blockf, copyF, N);
-
+  
+  Decode(blockf, receivedF, N);
+  
   // Get significant bits
   for (int i = 0; i < 8; i++) {
     for (int j = 0; j < 8; j++) {
@@ -361,11 +358,6 @@ void DecodeSuccesssiveBitApprox(double** blockf, double** blockF, int N, int sig
       }
     }
   }
-
-  for (int row = 0; row < 8; row++) {
-    free(copyF[row]);
-  }
-  free(copyF);
 }
 
 double C(int k) 
@@ -597,6 +589,9 @@ double*** create3DArray() {
     blocks[block] = (double**)malloc(8 * sizeof(double*));
     for (int row = 0; row < 8; row++) {
       blocks[block][row] = (double*)malloc(8 * sizeof(double));
+      for (int col = 0; col < 8; col++) {
+        blocks[block][row][col] = 0;
+      }
     }
   }
 
