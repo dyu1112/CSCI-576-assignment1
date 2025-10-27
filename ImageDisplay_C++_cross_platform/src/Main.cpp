@@ -45,13 +45,14 @@ class MyFrame : public wxFrame {
 
 /** Utility function to read image data */
 unsigned char *readImageData(string imagePath, int width, int height);
-float DCT(int u, int v, unsigned char** f);
-float IDCT(int x, int y, unsigned char** F);
-float C(int k);
+double DCT(int u, int v, double** f);
+double IDCT(int x, int y, double** F);
+double C(int k);
 
-unsigned char*** convertToBlocks(unsigned char* imageData, int channel);
-unsigned char* convertToImageData(unsigned char*** rBlocks, unsigned char*** gBlocks, unsigned char*** bBlocks);
-void free3DArray(unsigned char*** blocks);
+double*** convertToBlocks(unsigned char* imageData, int channel);
+unsigned char* convertToImageData(double*** rBlocks, double*** gBlocks, double*** bBlocks);
+double*** create3DArray();
+void free3DArray(double*** blocks);
 
 
 /** Definitions */
@@ -85,68 +86,78 @@ bool MyApp::OnInit() {
   unsigned char *inData = readImageData(imagePath, WIDTH, HEIGHT);
   //cout << "Original: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
 
-  unsigned char*** rBlocks = convertToBlocks(inData, 0);
-  unsigned char*** gBlocks = convertToBlocks(inData, 1);
-  unsigned char*** bBlocks = convertToBlocks(inData, 2);
+  cout << "Original first pixel R channel = " << (float)(inData[0]) << endl;
+
+  double*** rBlocksf = convertToBlocks(inData, 0);
+  double*** gBlocksf = convertToBlocks(inData, 1);
+  double*** bBlocksf = convertToBlocks(inData, 2);
   free(inData);
+  double*** rBlocksF = create3DArray();
+  double*** gBlocksF = create3DArray();
+  double*** bBlocksF = create3DArray();
 
-  unsigned char *outData = convertToImageData(rBlocks,gBlocks,bBlocks);
-  free3DArray(rBlocks);
-  free3DArray(gBlocks);
-  free3DArray(bBlocks);
-
-  /*
-  // C
-  if (colorMode == 1) {
-    if (quantizationMode == 1) {
-      uniformQuantization(inData, q1, q2, q3);
-    }
-    else {
-      nonUniformQuantization(inData, q1, q2, q3);
+  cout << "Finished Blocking. First block: " << endl;
+  for (int u = 0; u < 8; u++) {
+    for (int v = 0; v < 8; v++) {
+      cout << rBlocksf[0][u][v] << endl;
     }
   }
-  if (colorMode == 2) {
-    float *data = normalizeImageData(inData, WIDTH, HEIGHT);
-    cout << "After normalization: " << data[3 * DEBUG_X * DEBUG_Y] << ", " << data[3 * DEBUG_X * DEBUG_Y + 1] << ", " << data[3 * DEBUG_X * DEBUG_Y + 2] << endl; 
 
-    // RGB to YUV
-    for (int i = 0; i < WIDTH * HEIGHT; i++) {
-      float y = 0.299f * data[3*i] + 0.587f * data[3*i+1] + 0.114f * data[3*i+2];
-      float u = -0.147f * data[3*i] + -0.289f * data[3*i+1] + 0.436f * data[3*i+2];
-      float v = 0.615f * data[3*i] + -0.515f * data[3*i+1] + -0.100f * data[3*i+2];
-      data[3 * i] = y;
-      data[3 * i + 1] = u;
-      data[3 * i + 2] = v;
+  // Sequential Mode
+  if (M = 1) {
+    // Encode
+    for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+      for (int u = 0; u < 8; u++) {
+        for (int v = 0; v < 8; v++) {
+          rBlocksF[block][u][v] = round( DCT(u,v, rBlocksf[block]) / powf(2.0f,N) );
+          gBlocksF[block][u][v] = round( DCT(u,v, gBlocksf[block]) / powf(2.0f,N) );
+          bBlocksF[block][u][v] = round( DCT(u,v, bBlocksf[block]) / powf(2.0f,N) );
+        }
+      }
     }
-    cout << "In YUV: " << data[0] << ", " << data[1] << ", " << data[2] << endl; 
 
-    if (quantizationMode == 1) {
-      uniformQuantization(data, q1, q2, q3);
-    }
-    else {
-      nonUniformQuantizationF(data, q1, q2, q3);
-    }
-    cout << "In YUV after quantization: " << data[3 * DEBUG_X * DEBUG_Y] << ", " << data[3 * DEBUG_X * DEBUG_Y + 1] << ", " << data[3 * DEBUG_X * DEBUG_Y + 2] << endl; 
+    cout << "Finished Encoding. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
 
-    // YUV to RGB
-    for (int i = 0; i < WIDTH * HEIGHT; i++) {
-      data[3*i] = clamp<float>(data[3*i], 0.f, 1.f);
-      data[3*i+1] = clamp<float>(data[3*i+1], -0.436f, 0.436f);
-      data[3*i+2] = clamp<float>(data[3*i+2], -0.615f, 0.615f);
-
-      float r = 1.000f * data[3*i] + 0.000f * data[3*i+1] + 1.1398f * data[3*i+2];
-      float g = 1.000f * data[3*i] + -0.3946f * data[3*i+1] + -0.5806f * data[3*i+2];
-      float b = 1.000f * data[3*i] + 2.0321f * data[3*i+1] + 0.f * data[3*i+2];
-      // Prevent values from exceed 255 or going below 0 before converting to unsigned char
-      inData[3 * i] = clamp<float>(r * 255, 0.f, 255.f);
-      inData[3 * i + 1] = clamp<float>(g * 255, 0.f, 255.f);
-      inData[3 * i + 2] = clamp<float>(b * 255, 0.f, 255.f);
+    // Dequantize
+    for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+      for (int u = 0; u < 8; u++) {
+        for (int v = 0; v < 8; v++) {
+          // Dequantize
+          rBlocksF[block][u][v] *= pow(2.0f, N);
+          gBlocksF[block][u][v] *= pow(2.0f, N);
+          bBlocksF[block][u][v] *= pow(2.0f, N);
+        }
+      }
     }
-    free(data);
+
+    cout << "Finished Dequantizing. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
+
+    // Decode
+    for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+      for (int x = 0; x < 8; x++) {
+        for (int y = 0; y < 8; y++) {
+          rBlocksf[block][x][y] = IDCT(x,y,rBlocksF[block]);
+          gBlocksf[block][x][y] = IDCT(x,y,gBlocksF[block]);
+          bBlocksf[block][x][y] = IDCT(x,y,bBlocksF[block]);
+        }
+      }
+    }
   }
-  */
+  
+  cout << "Finished Decoding. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
+  
+  free3DArray(rBlocksF);
+  free3DArray(gBlocksF);
+  free3DArray(bBlocksF);
+
+  unsigned char *outData = convertToImageData(rBlocksf,gBlocksf,bBlocksf);
+  
+  free3DArray(rBlocksf);
+  free3DArray(gBlocksf);
+  free3DArray(bBlocksf);
 
   //cout << "After processing: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
+  cout << "Displaying image..." << endl;
   MyFrame *frame = new MyFrame("Image Display", imagePath, outData);
   frame->Show(true);
 
@@ -154,36 +165,36 @@ bool MyApp::OnInit() {
   return true;
 }
 
-float C(int k) 
+double C(int k) 
 {
   if (k == 0) {
-    return 1.0f / sqrtf(k);
+    return 1.0 / sqrt(2.0);
   }
   else {
-    return 1.0f;
+    return 1.0;
   }
 }
 
-float DCT(int u, int v, unsigned char** f) 
+double DCT(int u, int v, double** f) 
 {
-  float result = (1.0f/4.0f) * C(u) * C(v);
-  float sum = 0.0f;
+  double result = (1.0/4.0) * C(u) * C(v);
+  double sum = 0.0;
   for (int x = 0; x < 8; x++) {
     for (int y = 0; y < 8; y++) {
-      sum += f[x][y] * cosf(((2.0f*x + 1.0f) * u * M_PI) / 16.0f) * cosf(((2.0f*y + 1.0f) * v * M_PI) / 16.0f);
+      sum += f[x][y] * cos(((2.0*x + 1.0) * u * M_PI) / 16.0) * cos(((2.0*y + 1.0) * v * M_PI) / 16.0);
     }
   }
 
   return result * sum;
 }
 
-float IDCT(int x, int y, unsigned char** F)
+double IDCT(int x, int y, double** F)
 {
-  float result = 1.0f / 4.0f;
-  float sum = 0.0f;
-  for (int u = 0; u < 8; x++) {
-    for (int v = 0; v < 8; y++) {
-      sum += C(u) * C(v) * F[u][v] * cosf(((2.0f*x + 1.0f) * u * M_PI) / 16.0f) * cosf(((2.0f*y + 1.0f) * v * M_PI) / 16.0f);
+  double result = 1.0 / 4.0;
+  double sum = 0.0;
+  for (int u = 0; u < 8; u++) {
+    for (int v = 0; v < 8; v++) {
+      sum += C(u) * C(v) * F[u][v] * cos(((2.0*x + 1.0) * u * M_PI) / 16.0) * cos(((2.0*y + 1.0) * v * M_PI) / 16.0);
     }
   }
 
@@ -229,7 +240,6 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
   unsigned char *originalData = readImageData(imagePath, WIDTH, HEIGHT);
   unsigned char *mergedData =
       (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
-  float error = 0;
       
   // Iterate row by row
   for (int row = 0; row < HEIGHT; row++) {
@@ -247,14 +257,8 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
           mergedData[mergedIndex]     = inData[inIndex];
           mergedData[mergedIndex + 1] = inData[inIndex + 1];
           mergedData[mergedIndex + 2] = inData[inIndex + 2];
-
-          error += abs(originalData[originalIndex] / 255.f - inData[inIndex] / 255.f);
-          error += abs(originalData[originalIndex+1] / 255.f - inData[inIndex+1] / 255.f);
-          error += abs(originalData[originalIndex+2] / 255.f - inData[inIndex+2] / 255.f);
       }
   }
-
-  cout << "Normalized error: " << error << endl;
 
   free(inData);
   free(originalData);
@@ -340,15 +344,9 @@ unsigned char *readImageData(string imagePath, int width, int height) {
   return inData;
 }
 
-unsigned char*** convertToBlocks(unsigned char* imageData, int channel) {
+double*** convertToBlocks(unsigned char* imageData, int channel) {
   // Create a 3D array of 8x8 blocks
-  unsigned char ***blocks = (unsigned char ***)malloc(WIDTH * HEIGHT / 64 * sizeof(unsigned char**));
-  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-    blocks[block] = (unsigned char**)malloc(8 * sizeof(unsigned char*));
-    for (int row = 0; row < 8; row++) {
-      blocks[block][row] = (unsigned char*)malloc(8 * sizeof(unsigned char));
-    }
-  }
+  double ***blocks = create3DArray();
 
   int numBlocksX = WIDTH / 8;
 
@@ -368,7 +366,7 @@ unsigned char*** convertToBlocks(unsigned char* imageData, int channel) {
   return blocks;
 }
 
-unsigned char* convertToImageData(unsigned char*** rBlocks, unsigned char*** gBlocks, unsigned char*** bBlocks) {
+unsigned char* convertToImageData(double*** rBlocks, double*** gBlocks, double*** bBlocks) {
   unsigned char *imageData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * sizeof(unsigned char));
 
   int numBlocksX = WIDTH / 8;
@@ -383,9 +381,9 @@ unsigned char* convertToImageData(unsigned char*** rBlocks, unsigned char*** gBl
           int col = blockX * 8 + x;
           int row = blockY * 8 + y;
 
-          imageData[(row * WIDTH + col) * 3] = rBlocks[block][y][x];
-          imageData[(row * WIDTH + col) * 3 + 1] = gBlocks[block][y][x];
-          imageData[(row * WIDTH + col) * 3 + 2] = bBlocks[block][y][x];
+          imageData[(row * WIDTH + col) * 3] = clamp<double>(rBlocks[block][y][x], 0, 255);
+          imageData[(row * WIDTH + col) * 3 + 1] = clamp<double>(gBlocks[block][y][x], 0, 255);
+          imageData[(row * WIDTH + col) * 3 + 2] = clamp<double>(bBlocks[block][y][x], 0, 255);
         }
       }
     }
@@ -394,7 +392,20 @@ unsigned char* convertToImageData(unsigned char*** rBlocks, unsigned char*** gBl
   return imageData;
 }
 
-void free3DArray(unsigned char*** blocks) {
+double*** create3DArray() {
+  // Create a 3D array of 8x8 blocks
+  double ***blocks = (double ***)malloc(WIDTH * HEIGHT / 64 * sizeof(double**));
+  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+    blocks[block] = (double**)malloc(8 * sizeof(double*));
+    for (int row = 0; row < 8; row++) {
+      blocks[block][row] = (double*)malloc(8 * sizeof(double));
+    }
+  }
+
+  return blocks;
+}
+
+void free3DArray(double*** blocks) {
   for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
     for (int row = 0; row < 8; row++) {
       free(blocks[block][row]);
