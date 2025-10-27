@@ -20,6 +20,13 @@ const int HEIGHT = 288;
 const int DEBUG_X = 0;
 const int DEBUG_Y = 0;
 
+enum class Direction {
+  East,
+  Southwest,
+  South,
+  Northeast
+};
+
 /**
  * Class that implements wxApp
  */
@@ -66,7 +73,13 @@ private:
   int L;
 
   int currentBlock = 0;
+
+  // int currentX;
   int currentCoefficient = 0;
+  Direction currentDirection = Direction::East;
+  int currentX;
+  int currentY;
+
   int currentSigBit = 1;
 };
 
@@ -82,8 +95,9 @@ double*** create3DArray();
 void free3DArray(double*** blocks);
 
 void Decode(double** blockf, double** blockF, int N);
-void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int coefficient);
+void DecodeSpectral(double** blockf, double** blockF, int N, int coefficient, int x, int y, Direction direction);
 void DecodeSuccesssiveBitApprox(double** blocksf, double** blocksF, int N, int sigbit);
+void Zigzag(double** block, int coefficient);
 
 /** Definitions */
 
@@ -183,7 +197,23 @@ void MyTimer::Notify() {
     }
   }
   else if (M == 2) {
-
+    // Decode
+    if (currentCoefficient < 64) {
+      for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+        DecodeSpectral(rBlocksf[block], rBlocksF[block], N, currentCoefficient, currentX, currentY, currentDirection);
+        DecodeSpectral(gBlocksf[block], gBlocksF[block], N, currentCoefficient, currentX, currentY, currentDirection);
+        DecodeSpectral(bBlocksf[block], bBlocksF[block], N, currentCoefficient, currentX, currentY, currentDirection);
+      }
+      
+      convertToImageData(outData, rBlocksf,gBlocksf,bBlocksf, WIDTH * HEIGHT / 64);
+      frame->ChangeImage(outData);
+      currentCoefficient++;
+    }
+    else {
+      cout << "Finished Decoding. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
+      Stop();
+      delete this;
+    }
   }
   // Successive Bit Approximation
   else if (M == 3) {
@@ -234,9 +264,82 @@ void Decode(double** blockf, double** blockF, int N) {
   }
 }
 
-void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int N, int coefficient) {
-  
+void DecodeSpectral(double** blockf, double** blockF, int N, int coefficient, int x, int y, Direction direction) {
+  double** copyF = (double**)malloc(8 * sizeof(double*));
+  for (int row = 0; row < 8; row++) {
+    copyF[row] = (double*)malloc(8 * sizeof(double));
+    for (int col = 0; col < 8; col++) {
+      copyF[row][col] = blockF[row][col];
+    }
+  }
+
+  Zigzag(copyF, coefficient);
+
+  Decode(blockf, copyF, N);
+
+  for (int row = 0; row < 8; row++) {
+    free(copyF[row]);
+  }
+  free(copyF);
 }
+
+void Zigzag(double** block, int coefficient) {
+  int currentX = 0;
+  int currentY = 0;
+  Direction currentDirection = Direction::East;
+  int currentCoefficient = 0;
+
+  while (currentCoefficient < 64) {
+    if (currentCoefficient > coefficient) {
+      block[currentX][currentY] = 0;
+    }
+    
+    switch(currentDirection) {
+      case Direction::East:
+        currentX++;
+        if (currentY + 1 >= 8) {
+          currentDirection = Direction::Northeast;
+        }
+        else {
+          currentDirection = Direction::Southwest;
+        }
+        break;
+      case Direction::Southwest:
+        currentX--;
+        currentY++;
+        if (currentY + 1 >= 8) {
+          currentDirection = Direction::East;
+        }
+        if (currentX - 1 < 0) {
+          currentDirection = Direction::South;
+        }
+        break;
+      case Direction::South:
+        currentY++;
+        if (currentX + 1 >= 8) {
+          currentDirection = Direction::Southwest;
+        }
+        else {
+          currentDirection = Direction::Northeast;
+        }
+        break;
+      case Direction::Northeast:
+        currentX++;
+        currentY--;
+        if (currentX + 1 >= 8) {
+          currentDirection = Direction::South;
+        }
+        else if (currentY -1 < 0) {
+          currentDirection = Direction::East;
+        }
+        break;
+    }
+
+    currentCoefficient++;
+    //cout << "Zig zagged to x: " << currentX << ", y: " << currentY << endl;
+  }
+}
+
 void DecodeSuccesssiveBitApprox(double** blockf, double** blockF, int N, int sigbit) {
   double** copyF = (double**)malloc(8 * sizeof(double*));
   for (int row = 0; row < 8; row++) {
