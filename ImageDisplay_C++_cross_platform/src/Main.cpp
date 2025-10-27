@@ -35,12 +35,39 @@ class MyApp : public wxApp {
 class MyFrame : public wxFrame {
  public:
   MyFrame(const wxString &title, string imagePath);
-  MyFrame(const wxString &title, string imagePath, unsigned char *inData);
+  void ChangeImage(unsigned char *newData);
+  unsigned char *originalData;
 
  private:
   void OnPaint(wxPaintEvent &event);
   wxImage inImage;
   wxScrolledWindow *scrolledWindow;
+};
+
+class MyTimer : public wxTimer {
+public:
+  MyTimer(MyFrame* frame, unsigned char* inData, int M, int N, int L);
+  ~MyTimer();
+
+protected:
+  void Notify() override;
+  
+private:
+  double*** rBlocksf;
+  double*** gBlocksf;
+  double*** bBlocksf;
+  double*** rBlocksF;
+  double*** gBlocksF;
+  double*** bBlocksF;
+  MyFrame* frame;
+  unsigned char* outData;
+  int M;
+  int N;
+  int L;
+
+  int currentBlock = 0;
+  int currentCoefficient = 0;
+  int currentSigBit = 1;
 };
 
 /** Utility function to read image data */
@@ -50,9 +77,13 @@ double IDCT(int x, int y, double** F);
 double C(int k);
 
 double*** convertToBlocks(unsigned char* imageData, int channel);
-unsigned char* convertToImageData(double*** rBlocks, double*** gBlocks, double*** bBlocks);
+void convertToImageData(unsigned char* imageData, double*** rBlocks, double*** gBlocks, double*** bBlocks, int maxBlock);
 double*** create3DArray();
 void free3DArray(double*** blocks);
+
+void Decode(double*** blocksf, double*** blocksF, int block, int x, int y);
+void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int coefficient);
+void DecodeSuccesssiveBitApprox(double*** blocksf, double*** blocksF, int block, int x, int y, int sigBit);
 
 
 /** Definitions */
@@ -84,86 +115,110 @@ bool MyApp::OnInit() {
   int L = stoi(wxApp::argv[4].ToStdString()); // Latency in milliseconds
 
   unsigned char *inData = readImageData(imagePath, WIDTH, HEIGHT);
-  //cout << "Original: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
-
   cout << "Original first pixel R channel = " << (float)(inData[0]) << endl;
 
-  double*** rBlocksf = convertToBlocks(inData, 0);
-  double*** gBlocksf = convertToBlocks(inData, 1);
-  double*** bBlocksf = convertToBlocks(inData, 2);
-  free(inData);
-  double*** rBlocksF = create3DArray();
-  double*** gBlocksF = create3DArray();
-  double*** bBlocksF = create3DArray();
-
-  cout << "Finished Blocking. First block: " << endl;
-  for (int u = 0; u < 8; u++) {
-    for (int v = 0; v < 8; v++) {
-      cout << rBlocksf[0][u][v] << endl;
-    }
-  }
-
-  // Sequential Mode
-  if (M = 1) {
-    // Encode
-    for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-      for (int u = 0; u < 8; u++) {
-        for (int v = 0; v < 8; v++) {
-          rBlocksF[block][u][v] = round( DCT(u,v, rBlocksf[block]) / powf(2.0f,N) );
-          gBlocksF[block][u][v] = round( DCT(u,v, gBlocksf[block]) / powf(2.0f,N) );
-          bBlocksF[block][u][v] = round( DCT(u,v, bBlocksf[block]) / powf(2.0f,N) );
-        }
-      }
-    }
-
-    cout << "Finished Encoding. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
-
-    // Dequantize
-    for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-      for (int u = 0; u < 8; u++) {
-        for (int v = 0; v < 8; v++) {
-          // Dequantize
-          rBlocksF[block][u][v] *= pow(2.0f, N);
-          gBlocksF[block][u][v] *= pow(2.0f, N);
-          bBlocksF[block][u][v] *= pow(2.0f, N);
-        }
-      }
-    }
-
-    cout << "Finished Dequantizing. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
-
-    // Decode
-    for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
-      for (int x = 0; x < 8; x++) {
-        for (int y = 0; y < 8; y++) {
-          rBlocksf[block][x][y] = IDCT(x,y,rBlocksF[block]);
-          gBlocksf[block][x][y] = IDCT(x,y,gBlocksF[block]);
-          bBlocksf[block][x][y] = IDCT(x,y,bBlocksF[block]);
-        }
-      }
-    }
-  }
-  
-  cout << "Finished Decoding. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
-  
-  free3DArray(rBlocksF);
-  free3DArray(gBlocksF);
-  free3DArray(bBlocksF);
-
-  unsigned char *outData = convertToImageData(rBlocksf,gBlocksf,bBlocksf);
-  
-  free3DArray(rBlocksf);
-  free3DArray(gBlocksf);
-  free3DArray(bBlocksf);
-
-  //cout << "After processing: " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 1]) << ", " << static_cast<int>(inData[3 * DEBUG_X * DEBUG_Y + 2]) << endl; 
-  cout << "Displaying image..." << endl;
-  MyFrame *frame = new MyFrame("Image Display", imagePath, outData);
+  MyFrame *frame = new MyFrame("Image Display", imagePath);
   frame->Show(true);
+  MyTimer *timer = new MyTimer(frame, inData, M, N, L);
 
   // return true to continue, false to exit the application
   return true;
 }
+
+MyTimer::MyTimer(MyFrame* frame, unsigned char* inData, int M, int N, int L) 
+: wxTimer()
+{
+  this->frame = frame;
+  this->M = M;
+  this->N = N;
+  this->L = L;
+  
+  rBlocksf = convertToBlocks(inData, 0);
+  gBlocksf = convertToBlocks(inData, 1);
+  bBlocksf = convertToBlocks(inData, 2);
+  free(inData);
+  rBlocksF = create3DArray();
+  gBlocksF = create3DArray();
+  bBlocksF = create3DArray();
+
+  cout << "Finished Blocking. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
+
+  // Encode
+  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+    for (int u = 0; u < 8; u++) {
+      for (int v = 0; v < 8; v++) {
+        rBlocksF[block][u][v] = round( DCT(u,v, rBlocksf[block]) / powf(2.0f,N) );
+        gBlocksF[block][u][v] = round( DCT(u,v, gBlocksf[block]) / powf(2.0f,N) );
+        bBlocksF[block][u][v] = round( DCT(u,v, bBlocksf[block]) / powf(2.0f,N) );
+      }
+    }
+  }
+
+  cout << "Finished Encoding. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
+
+  // Dequantize
+  for (int block = 0; block < WIDTH * HEIGHT / 64; block++) {
+    for (int u = 0; u < 8; u++) {
+      for (int v = 0; v < 8; v++) {
+        // Dequantize
+        rBlocksF[block][u][v] *= pow(2.0f, N);
+        gBlocksF[block][u][v] *= pow(2.0f, N);
+        bBlocksF[block][u][v] *= pow(2.0f, N);
+      }
+    }
+  }
+
+  // Initialize black image
+  outData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * sizeof(unsigned char));
+  for (int i = 0; i < WIDTH * HEIGHT * 3; i++) {
+    outData[i] = 0;
+  }
+
+  cout << "Finished Dequantizing. rBlocksF[0][0][0] = " << rBlocksF[0][0][0] << endl;
+  Start(L);
+}
+
+void MyTimer::Notify() {
+  // Sequential Mode
+  if (M = 1) {
+    // Decode
+    if (currentBlock < WIDTH * HEIGHT / 64) {
+      for (int x = 0; x < 8; x++) {
+        for (int y = 0; y < 8; y++) {
+          Decode(rBlocksf, rBlocksF, currentBlock, x, y);
+          Decode(gBlocksf, gBlocksF, currentBlock, x, y);
+          Decode(bBlocksf, bBlocksF, currentBlock, x, y);
+        }
+      }
+      convertToImageData(outData, rBlocksf,gBlocksf,bBlocksf, currentBlock);
+      frame->ChangeImage(outData);
+      currentBlock++;
+    }
+    else {
+      cout << "Finished Decoding. rBlocksf[0][0][0] = " << rBlocksf[0][0][0] << endl;
+      Stop();
+      delete this;
+    }
+  }
+}
+
+MyTimer::~MyTimer() {
+  free3DArray(rBlocksF);
+  free3DArray(gBlocksF);
+  free3DArray(bBlocksF);
+  free3DArray(rBlocksf);
+  free3DArray(gBlocksf);
+  free3DArray(bBlocksf);
+  free(outData);
+  free(frame->originalData);
+}
+
+void Decode(double*** blocksf, double*** blocksF, int block, int x, int y) {
+  blocksf[block][x][y] = IDCT(x,y,blocksF[block]);
+}
+
+void DecodeSpectral(double*** blocksf, double*** blocksF, int block, int x, int y, int coefficient);
+void DecodeSuccesssiveBitApprox(double*** blocksf, double*** blocksF, int block, int x, int y, int sigbit);
 
 double C(int k) 
 {
@@ -208,38 +263,8 @@ double IDCT(int x, int y, double** F)
 MyFrame::MyFrame(const wxString &title, string imagePath)
     : wxFrame(NULL, wxID_ANY, title) {
 
-  // Modify the height and width values here to read and display an image with
-  // different dimensions.    
-
-  unsigned char *inData = readImageData(imagePath, WIDTH, HEIGHT);
-
-  // the last argument is static_data, if it is false, after this call the
-  // pointer to the data is owned by the wxImage object, which will be
-  // responsible for deleting it. So this means that you should not delete the
-  // data yourself.
-  inImage.SetData(inData, WIDTH, HEIGHT, false);
-
-  // Set up the scrolled window as a child of this frame
-  scrolledWindow = new wxScrolledWindow(this, wxID_ANY);
-  scrolledWindow->SetScrollbars(10, 10, WIDTH, HEIGHT);
-  scrolledWindow->SetVirtualSize(WIDTH, HEIGHT);
-
-  // Bind the paint event to the OnPaint function of the scrolled window
-  scrolledWindow->Bind(wxEVT_PAINT, &MyFrame::OnPaint, this);
-
-  // Set the frame size
-  SetClientSize(WIDTH, HEIGHT);
-
-  // Set the frame background color
-  SetBackgroundColour(*wxBLACK);
-}
-
-MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
-    : wxFrame(NULL, wxID_ANY, title) {
-
-  unsigned char *originalData = readImageData(imagePath, WIDTH, HEIGHT);
-  unsigned char *mergedData =
-      (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
+  originalData = readImageData(imagePath, WIDTH, HEIGHT);
+  unsigned char *mergedData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
       
   // Iterate row by row
   for (int row = 0; row < HEIGHT; row++) {
@@ -254,14 +279,11 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
           // Right image
           mergedIndex = (row * WIDTH * 2 + (col + WIDTH)) * 3;
           int inIndex = (row * WIDTH + col) * 3;
-          mergedData[mergedIndex]     = inData[inIndex];
-          mergedData[mergedIndex + 1] = inData[inIndex + 1];
-          mergedData[mergedIndex + 2] = inData[inIndex + 2];
+          mergedData[mergedIndex]     = 0;
+          mergedData[mergedIndex + 1] = 0;
+          mergedData[mergedIndex + 2] = 0;
       }
   }
-
-  free(inData);
-  free(originalData);
 
   // the last argument is static_data, if it is false, after this call the
   // pointer to the data is owned by the wxImage object, which will be
@@ -282,6 +304,31 @@ MyFrame::MyFrame(const wxString &title, string imagePath, unsigned char* inData)
 
   // Set the frame background color
   SetBackgroundColour(*wxBLACK);
+}
+
+void MyFrame::ChangeImage(unsigned char* newData) {
+  unsigned char *mergedData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * 2 * sizeof(unsigned char));
+  
+  for (int row = 0; row < HEIGHT; row++) {
+    for (int col = 0; col < WIDTH; col++) {
+      // Left image
+      int mergedIndex = (row * WIDTH * 2 + col) * 3;
+      int originalIndex = (row * WIDTH + col) * 3;
+      mergedData[mergedIndex]     = originalData[originalIndex];
+      mergedData[mergedIndex + 1] = originalData[originalIndex + 1];
+      mergedData[mergedIndex + 2] = originalData[originalIndex + 2];
+      
+      // Right image
+      mergedIndex = (row * WIDTH * 2 + (col + WIDTH)) * 3;
+      int inIndex = (row * WIDTH + col) * 3;
+      mergedData[mergedIndex]     = newData[inIndex];
+      mergedData[mergedIndex + 1] = newData[inIndex + 1];
+      mergedData[mergedIndex + 2] = newData[inIndex + 2];
+    }
+  }
+
+  inImage.SetData(mergedData, WIDTH * 2, HEIGHT, false);
+  scrolledWindow->Refresh();
 }
 
 /**
@@ -366,9 +413,7 @@ double*** convertToBlocks(unsigned char* imageData, int channel) {
   return blocks;
 }
 
-unsigned char* convertToImageData(double*** rBlocks, double*** gBlocks, double*** bBlocks) {
-  unsigned char *imageData = (unsigned char *)malloc(WIDTH * HEIGHT * 3 * sizeof(unsigned char));
-
+void convertToImageData(unsigned char* imageData, double*** rBlocks, double*** gBlocks, double*** bBlocks, int maxBlock) {
   int numBlocksX = WIDTH / 8;
   int numBlocksY = HEIGHT / 8;
 
@@ -381,15 +426,20 @@ unsigned char* convertToImageData(double*** rBlocks, double*** gBlocks, double**
           int col = blockX * 8 + x;
           int row = blockY * 8 + y;
 
-          imageData[(row * WIDTH + col) * 3] = clamp<double>(rBlocks[block][y][x], 0, 255);
-          imageData[(row * WIDTH + col) * 3 + 1] = clamp<double>(gBlocks[block][y][x], 0, 255);
-          imageData[(row * WIDTH + col) * 3 + 2] = clamp<double>(bBlocks[block][y][x], 0, 255);
+          if (block > maxBlock) {
+            imageData[(row * WIDTH + col) * 3] = 0;
+            imageData[(row * WIDTH + col) * 3 + 1] = 0;
+            imageData[(row * WIDTH + col) * 3 + 2] = 0;
+          }
+          else {
+            imageData[(row * WIDTH + col) * 3] = clamp<double>(rBlocks[block][y][x], 0, 255);
+            imageData[(row * WIDTH + col) * 3 + 1] = clamp<double>(gBlocks[block][y][x], 0, 255);
+            imageData[(row * WIDTH + col) * 3 + 2] = clamp<double>(bBlocks[block][y][x], 0, 255);
+          }
         }
       }
     }
   }
-
-  return imageData;
 }
 
 double*** create3DArray() {
